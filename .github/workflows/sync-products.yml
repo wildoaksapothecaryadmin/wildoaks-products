@@ -78,12 +78,9 @@ jobs:
           total=$(jq '.products | length' all-products.json)
           echo "📊 Total products fetched: $total"
 
-          # Transform to search-friendly format
-          cat all-products.json | jq '[.products[] | {
+          # Transform to search-friendly format (only visible products)
+          cat all-products.json | jq '[.products[] | select(.isVisible == true) | {
             name: .name,
-            isVisible: .isVisible,
-            status: .status,
-            isPublished: .isPublished,
             url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
             category: (.categories[0] // "Products"),
             price: (.variants[0].priceMoney.value // "0"),
