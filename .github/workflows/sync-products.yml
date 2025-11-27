@@ -82,8 +82,8 @@ jobs:
           cat all-products.json | jq '[.products[] | select(.isVisible == true) | {
             name: .name,
             url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
-            category: (.categories[0] // "Products"),
-            price: (.variants[0].priceMoney.value // "0"),
+            category: (.categories[0] // ""),
+            price: (.variants[0].priceMoney.value // ""),
             currency: (.variants[0].priceMoney.currency // "USD"),
             image: (.images[0].url // ""),
             description: (.description // "")
