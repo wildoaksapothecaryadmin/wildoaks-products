@@ -19,17 +19,67 @@ jobs:
         env:
           SQUARESPACE_API_KEY: ${{ secrets.SQUARESPACE_API_KEY }}
         run: |
-          curl -X GET "https://api.squarespace.com/1.0/commerce/products" \
-            -H "Authorization: Bearer $SQUARESPACE_API_KEY" \
-            -H "User-Agent: WildOaks-Product-Sync" \
-            -o raw-products.json
+          # Initialize empty products array
+          echo '{"products": []}' > all-products.json
 
-          if [ ! -s raw-products.json ]; then
-            echo "Error: Failed to fetch products from Squarespace API"
-            exit 1
-          fi
+          cursor=""
+          page=1
 
-          cat raw-products.json | jq '[.products[] | {
+          # Loop through all pages
+          while true; do
+            echo "📄 Fetching page $page..."
+
+            # Build URL with cursor if we have one
+            if [ -z "$cursor" ]; then
+              url="https://api.squarespace.com/1.0/commerce/products"
+            else
+              url="https://api.squarespace.com/1.0/commerce/products?cursor=$cursor"
+            fi
+
+            # Fetch this page
+            curl -X GET "$url" \
+              -H "Authorization: Bearer $SQUARESPACE_API_KEY" \
+              -H "User-Agent: WildOaks-Product-Sync" \
+              -o "page-$page.json"
+
+            # Check if successful
+            if [ ! -s "page-$page.json" ]; then
+              echo "❌ Failed to fetch page $page"
+              exit 1
+            fi
+
+            # Count products on this page
+            page_count=$(jq '.products | length' "page-$page.json")
+            echo "   Found $page_count products on page $page"
+
+            # Merge products from this page into all-products
+            jq -s '.[0].products + .[1].products | {products: .}' all-products.json "page-$page.json" > temp.json
+            mv temp.json all-products.json
+
+            # Check if there's a next page
+            has_next=$(jq -r '.pagination.hasNextPage // false' "page-$page.json")
+
+            if [ "$has_next" = "true" ]; then
+              cursor=$(jq -r '.pagination.nextPageCursor' "page-$page.json")
+              page=$((page + 1))
+            else
+              echo "✅ No more pages. Total pages fetched: $page"
+              break
+            fi
+
+            # Safety limit (prevent infinite loop)
+            if [ $page -gt 20 ]; then
+              echo "⚠️ Reached safety limit of 20 pages"
+              break
+            fi
+          done
+
+          # Count total products
+          total=$(jq '.products | length' all-products.json)
+          echo "📊 Total products fetched: $total"
+
+          # Transform to search-friendly format
+          cat all-products.json | jq '[.products[] | {
             name: .name,
             isVisible: .isVisible,
             status: .status,
@@ -42,8 +92,11 @@ jobs:
             description: (.description // "")
           }] | sort_by(.name)' > products.json
 
-          rm raw-products.json
-          echo "✅ Successfully processed $(jq length products.json) products"
+          # Clean up
+          rm all-products.json page-*.json
+
+          final_count=$(jq length products.json)
+          echo "✅ Successfully processed $final_count products"
 
       - name: Commit and Push Updated Products
         run: |
