@@ -83,8 +83,8 @@ jobs:
             name: .name,
             url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
             category: (.categories[0] // ""),
-            price: (.variants[0].priceMoney.value // ""),
-            currency: (.variants[0].priceMoney.currency // "USD"),
+            price: (.variants[0].pricing.basePrice.value // "0"),
+  currency: (.variants[0].pricing.basePrice.currency // "USD"),
             image: (.images[0].url // ""),
             description: (.description // "")
           }] | sort_by(.name)' > products.json
