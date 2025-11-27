@@ -1,65 +1,65 @@
 name: Sync Squarespace Products
 
-on:
-  schedule:
-    # Runs every hour at minute 0 (12:00am, 1:00am, 2:00am, etc.)
-    - cron: '0 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+  on:
+    schedule:
+      - cron: '0 * * * *'
+    workflow_dispatch:
 
-jobs:
-  sync-products:
-    runs-on: ubuntu-latest
+  jobs:
+    sync-products:
+      runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+          with:
+            token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch Squarespace Products
-        env:
-          SQUARESPACE_API_KEY: ${{ secrets.SQUARESPACE_API_KEY }}
-          SQUARESPACE_SITE_ID: ${{ secrets.SQUARESPACE_SITE_ID }}
-        run: |
-          # Fetch products from Squarespace Commerce API
-          curl -X GET "https://api.squarespace.com/1.0/commerce/products" \
-            -H "Authorization: Bearer $SQUARESPACE_API_KEY" \
-            -H "User-Agent: WildOaks-Product-Sync" \
-            -o raw-products.json
+        - name: Fetch Squarespace Products
+          env:
+            SQUARESPACE_API_KEY: ${{ secrets.SQUARESPACE_API_KEY }}
+          run: |
+            curl -X GET "https://api.squarespace.com/1.0/commerce/products" 
+  \
+              -H "Authorization: Bearer $SQUARESPACE_API_KEY" \
+              -H "User-Agent: WildOaks-Product-Sync" \
+              -o raw-products.json
 
-          # Check if API call was successful
-          if [ ! -s raw-products.json ]; then
-            echo "Error: Failed to fetch products from Squarespace API"
-            exit 1
-          fi
+            if [ ! -s raw-products.json ]; then
+              echo "Error: Failed to fetch products from Squarespace API"
+              cat raw-products.json
+              exit 1
+            fi
 
-          # Parse and transform to search-friendly format
-          cat raw-products.json | jq '[.products[] | select(.isVisible == true) | {
-            name: .name,
-            url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
-            category: (.categories[0] // "Products"),
-            price: (.variants[0].priceMoney.value // "0"),
-            currency: (.variants[0].priceMoney.currency // "USD"),
-            image: (.images[0].url // ""),
-            description: (.description // "")
-          }] | sort_by(.name)' > products.json
+            cat raw-products.json | jq '[.products[] | select(.isVisible == 
+  true) | {
+              name: .name,
+              url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub("
+   "; "-") | gsub("[^a-z0-9-]"; "")))),
+              category: (.categories[0] // "Products"),
+              price: (.variants[0].priceMoney.value // "0"),
+              currency: (.variants[0].priceMoney.currency // "USD"),
+              image: (.images[0].url // ""),
+              description: (.description // "")
+            }] | sort_by(.name)' > products.json
 
-          # Clean up
-          rm raw-products.json
+            rm raw-products.json
+            echo "✅ Successfully processed $(jq length products.json) 
+  visible products"
 
-          echo "✅ Successfully processed $(jq length products.json) visible products"
+        - name: Commit and Push Updated Products
+          run: |
+            git config --local user.email 
+  "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add products.json
 
-      - name: Commit and Push Updated Products
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add products.json
+            if git diff --staged --quiet; then
+              echo "No changes to products.json"
+            else
+              git commit -m "🔄 Auto-update products - $(date -u +'%Y-%m-%d 
+  %H:%M UTC')"
+              git push
+              echo "✅ Products updated and pushed"
+            fi
 
-          # Only commit if there are changes
-          if git diff --staged --quiet; then
-            echo "No changes to products.json"
-          else
-            git commit -m "🔄 Auto-update products from Squarespace API - $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
-            echo "✅ Products updated and pushed to repository"
-          fi
