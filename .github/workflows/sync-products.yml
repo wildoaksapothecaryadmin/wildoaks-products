@@ -2,8 +2,28 @@ name: Sync Squarespace Products
 
 on:
   schedule:
+    # Normal hourly sync (visible products only)
     - cron: '0 * * * *'
+    # DROP DAY: Fetch ALL products at 12:45 PM PST (20:45 UTC)
+    # Note: PST = UTC-8, but during PDT (Mar-Nov) = UTC-7
+    # 12:45 PM PST = 20:45 UTC | 12:45 PM PDT = 19:45 UTC
+    # We schedule both to cover PST and PDT
+    - cron: '45 20 1 * *'
+    - cron: '45 19 1 * *'
+    # DROP DAY: Revert to visible-only at 2:00 PM PST/PDT
+    # 2:00 PM PST = 22:00 UTC | 2:00 PM PDT = 21:00 UTC
+    - cron: '0 22 1 * *'
+    - cron: '0 21 1 * *'
   workflow_dispatch:
+    inputs:
+      include_hidden:
+        description: 'Include hidden products (for drop day)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   sync-products:
@@ -15,9 +35,37 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine if this is a drop-day sync
+        id: check-drop
+        run: |
+          # Check if manually triggered with include_hidden
+          if [ "${{ github.event.inputs.include_hidden }}" = "true" ]; then
+            echo "include_all=true" >> $GITHUB_OUTPUT
+            echo "🚀 DROP DAY MODE: Manual trigger - including ALL products"
+            exit 0
+          fi
+
+          # Get current time in PST/PDT
+          CURRENT_HOUR=$(TZ='America/Los_Angeles' date +%H)
+          CURRENT_MIN=$(TZ='America/Los_Angeles' date +%M)
+          CURRENT_DAY=$(TZ='America/Los_Angeles' date +%d)
+          TIME_IN_MIN=$((10#$CURRENT_HOUR * 60 + 10#$CURRENT_MIN))
+
+          echo "Current LA time: Day=$CURRENT_DAY Hour=$CURRENT_HOUR Min=$CURRENT_MIN ($TIME_IN_MIN min)"
+
+          # 1st of the month, between 12:40 PM (760) and 1:59 PM (839)
+          if [ "$CURRENT_DAY" = "01" ] && [ "$TIME_IN_MIN" -ge 760 ] && [ "$TIME_IN_MIN" -lt 840 ]; then
+            echo "include_all=true" >> $GITHUB_OUTPUT
+            echo "🚀 DROP DAY MODE: Including ALL products (hidden + visible)"
+          else
+            echo "include_all=false" >> $GITHUB_OUTPUT
+            echo "📦 Normal sync: Visible products only"
+          fi
+
       - name: Fetch Squarespace Products
         env:
           SQUARESPACE_API_KEY: ${{ secrets.SQUARESPACE_API_KEY }}
+          INCLUDE_ALL: ${{ steps.check-drop.outputs.include_all }}
         run: |
           # Initialize empty products array
           echo '{"products": []}' > all-products.json
@@ -78,16 +126,31 @@ jobs:
           total=$(jq '.products | length' all-products.json)
           echo "📊 Total products fetched: $total"
 
-          # Transform to search-friendly format (only visible products)
-          cat all-products.json | jq '[.products[] | select(.isVisible == true) | {
-            name: .name,
-            url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
-            category: (.categories[0] // ""),
-            price: (.variants[0].pricing.basePrice.value // "0"),
-            currency: (.variants[0].pricing.basePrice.currency // "USD"),
-            image: (.images[0].url // ""),
-            description: (.description // "")
-          }] | sort_by(.name)' > products.json
+          # Transform to search-friendly format
+          # DROP DAY: include ALL products | NORMAL: visible only
+          if [ "$INCLUDE_ALL" = "true" ]; then
+            echo "🚀 DROP DAY: Including ALL products (visible + hidden)"
+            cat all-products.json | jq '[.products[] | {
+              name: .name,
+              url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
+              category: (.categories[0] // ""),
+              price: (.variants[0].pricing.basePrice.value // "0"),
+              currency: (.variants[0].pricing.basePrice.currency // "USD"),
+              image: (.images[0].url // ""),
+              description: (.description // "")
+            }] | sort_by(.name)' > products.json
+          else
+            echo "📦 Normal sync: Visible products only"
+            cat all-products.json | jq '[.products[] | select(.isVisible == true) | {
+              name: .name,
+              url: ("/shop/" + (.urlSlug // (.name | ascii_downcase | gsub(" "; "-") | gsub("[^a-z0-9-]"; "")))),
+              category: (.categories[0] // ""),
+              price: (.variants[0].pricing.basePrice.value // "0"),
+              currency: (.variants[0].pricing.basePrice.currency // "USD"),
+              image: (.images[0].url // ""),
+              description: (.description // "")
+            }] | sort_by(.name)' > products.json
+          fi
 
           # Clean up
           rm all-products.json page-*.json
@@ -104,7 +167,12 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to products.json"
           else
-            git commit -m "🔄 Auto-update products - $(date -u +'%Y-%m-%d %H:%M UTC')"
+            INCLUDE_ALL="${{ steps.check-drop.outputs.include_all }}"
+            if [ "$INCLUDE_ALL" = "true" ]; then
+              git commit -m "🚀 DROP DAY: All products sync - $(date -u +'%Y-%m-%d %H:%M UTC')"
+            else
+              git commit -m "🔄 Auto-update products - $(date -u +'%Y-%m-%d %H:%M UTC')"
+            fi
             git push
             echo "✅ Products updated and pushed"
           fi
